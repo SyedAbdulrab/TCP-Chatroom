@@ -1,0 +1,174 @@
+# ******************************** SERVER.PY ********************* #
+
+import threading
+import socket
+import time
+
+host = '127.0.0.1'  # local host
+port = 55555
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind((host, port))
+server.listen()
+
+clients = []
+nicknames = []
+
+
+def broadcast(message):
+    for client in clients:
+        client.send(message)
+
+
+def kick_user(name):
+    if name in nicknames:
+        name_index = nicknames.index(name)
+        client_to_kick = clients[name_index]
+        clients.remove(client_to_kick)
+        client_to_kick.send ("you were kicked by the admin".encode('ascii'))
+        client_to_kick.close()
+        nicknames.remove(name)
+        broadcast(f"{name} was kicked by an admin ")
+
+def handle(client):
+    while True:
+        try:
+            msg = message = client.recv(1024)
+            if msg.decode('ascii').startsWith('KICK'):
+                if nicknames[clients.index(client)] == 'admin':
+                    name_to_kick = msg.decode('ascii')[5:]
+                    kick_user(name_to_kick)
+                else :
+                    client.send('command was refused'.encode('ascii'))
+            elif msg.decode('ascii').startsWith('BAN'):
+                if nicknames[clients.index(client)] == 'admin':
+                    name_to_ban = msg.decode('ascii')[4:]
+                    kick_user(name_to_ban)
+                    with open('bans.txt','a') as f:
+                        f.write(f'{name_to_ban}\n')
+                    print(f"{name_to_ban} was banned")
+                else:
+                    client.send('command was refused!'.encode('ascii'))
+            broadcast(message)
+        except:
+            index = clients.index(client)
+            clients.remove(client)
+            client.close()
+            nickname = nicknames[index]
+            broadcast(f"{nickname} left the chat".encode('ascii'))
+            nicknames.remove(nickname)
+            break
+
+
+def receive():
+    while True:
+        client, address = server.accept() # accept clients all the time
+
+        print(f"Connected with {str(address)}")
+        # when someone connects to the server we will send the address to the
+        # servers console so that the admin knows that someone just connected to the server
+
+        client.send('NICK'.encode('ascii'))
+        # the client will now receive the NICK message which will signal to the client to enter his nickname
+        nickname = client.recv(1024).decode('ascii')  # receiving the nickname from the client
+
+        with open('bans.txt','r') as f :
+            bans = f.readlines()
+
+        if nickname + '\n' in bans:
+            client.send('BAN'.encode('ascii'))
+            client.close()
+            continue
+        if nickname == 'admin':
+            client.send('PASS'.encode('ascii'))
+            password = client.recv(1024).decode('ascii')
+
+            if password != 'adminpass':
+                client.send('REFUSE'.encode('ascii'))
+                client.close()
+                continue
+
+
+
+        nicknames.append(nickname)  # appending the nickname to the nickname list
+        clients.append(client)  # appending the client to the client list
+
+        print(f"Nickname of the client is {nickname}\n")
+        broadcast(f"{nickname} joined the chat".encode('ascii'))
+        # here we broadcast to all the clients connected to the server that this client just joined the chat
+        # client.send("Connected to the server")
+        # the client will receive the message that the connection was successful
+
+        # we will run one thread for each client as we will have to manage them at the same time
+        thread = threading.Thread(target=handle,args=(client,))
+        thread.start()
+
+
+print('Server is listening...')
+
+receive()
+
+#********************** CLIENT.PY ********************************#
+
+import socket
+import threading
+
+nickname = input("Choose a nickname: ")
+if nickname == 'admin':
+    password = input('enter password for admin')
+
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(('127.0.0.1', 55555))
+stop_thread = False
+
+
+def receive():
+    while True:
+        global stop_thread
+        if stop_thread == True:
+            break
+        try:
+            message = client.recv(1024).decode('ascii')  # receiving messages from the client
+            if message == "NICK":
+                client.send(nickname.encode("ascii"))
+                next_message = client.recv(1024).decode('ascii')
+                if next_message == 'PASS':
+                    client.send(password).encode('ascii')
+                    if client.recv(1024).decode('ascii') == 'REFUSE':
+                        print('connection was refused! wrong password')
+                elif next_message == "BAN":
+                    print('connection refused because of ban')
+                    client.close()
+                    stop_thread=True
+            else:
+                print(message)
+
+        except:
+            print("An error occurred")
+            client.close()
+            break
+
+
+def write():
+    while True:
+        if stop_thread :
+            break
+        message = f"{nickname}: {input('')}"
+
+        if message[len(nickname)+2].startswith('/'):
+            if nickname == 'admin':
+                if (message[len(nickname)+2].startswith('/kick')):
+                    client.send(f'KICK {message[len(nickname)+2+6:]}'.encode('ascii'))
+                elif (message[len(nickname)+1].startswith('/ban')):
+                    client.send(f'BAN {message[len(nickname)+2+5:]}'.encode('ascii'))
+
+        else:
+            print('Commands can only be executed by the admin!')
+        client.send(message.encode('ascii'))
+
+
+receive_thread = threading.Thread(target=receive)
+receive_thread.start()
+
+write_thread = threading.Thread(target=write)
+write_thread.start()
